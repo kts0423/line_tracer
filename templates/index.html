@@ -1,33 +1,33 @@
+<!-- templates/index.html -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
   <title>라인 트레이서 대시보드</title>
   <style>
-    body { font-family: sans-serif; display: flex; }
-    #video { width: 640px; border: 1px solid #ccc; }
-    #monitor { margin-left: 20px; width: 300px; height: 240px;
-               white-space: pre; background: #111; color: #0f0;
-               padding: 10px; overflow-y: scroll; border: 1px solid #ccc; }
+    body { font-family: sans-serif; display: flex; flex-wrap: wrap; }
+    #videoCanvas { border: 1px solid #ccc; }
+    #monitor { white-space: pre; background: #111; color: #0f0;
+               padding: 10px; overflow-y: auto;
+               width: 300px; height: 240px; margin-left: 20px; }
     #controls { margin-left: 20px; }
     button { margin: 4px; padding: 8px 12px; }
-    #modeToggle { margin-bottom: 8px; }
+    #modeToggle { margin-bottom: 8px; display: block; }
   </style>
 </head>
 <body>
   <div>
     <h3>실시간 영상</h3>
-    <img id="video" src="/video_feed" />
+    <canvas id="videoCanvas" width="640" height="480"></canvas>
   </div>
   <div>
-    <h3>Arduino 시리얼 모니터</h3>
+    <h3>Arduino Serial Monitor</h3>
     <div id="monitor"></div>
   </div>
   <div id="controls">
     <h3>조작 모드</h3>
     <label id="modeToggle">
-      <input type="checkbox" id="modeCheckbox" />
-      Auto Mode
+      <input type="checkbox" id="modeCheckbox" /> Auto Mode
     </label>
     <h3>RC카 제어</h3>
     <button onclick="sendCmd('F')">Forward</button>
@@ -37,41 +37,50 @@
     <button onclick="sendCmd('S')">Stop</button>
   </div>
 
+  <script src="https://cdn.socket.io/4.5.0/socket.io.min.js"></script>
   <script>
-    // 1) Serial SSE 구독
-    const evt = new EventSource("/serial_stream");
-    const mon = document.getElementById("monitor");
+    const socket = io();
+    const canvas = document.getElementById('videoCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // WebSocket 프레임 수신 → Canvas 렌더
+    socket.on('frame', hexData => {
+      const len = hexData.length/2;
+      const arr = new Uint8Array(len);
+      for(let i=0; i<len; i++){
+        arr[i] = parseInt(hexData.substr(i*2,2),16);
+      }
+      createImageBitmap(new Blob([arr],{type:'image/jpeg'}))
+        .then(img => ctx.drawImage(img,0,0,canvas.width,canvas.height));
+    });
+
+    // Serial SSE
+    const mon = document.getElementById('monitor');
+    const evt = new EventSource('/serial_stream');
     evt.onmessage = e => {
-      mon.textContent += e.data + "\n";
+      mon.textContent += e.data + '\n';
       mon.scrollTop = mon.scrollHeight;
     };
 
-    // 2) 모드 토글
-    const checkbox = document.getElementById("modeCheckbox");
-    // 초기 모드 조회
-    fetch('/mode').then(r=>r.json()).then(json=>{
-      checkbox.checked = (json.mode === 'auto');
-    });
-    checkbox.addEventListener('change', () => {
-      const mode = checkbox.checked ? 'auto' : 'manual';
-      fetch('/mode', {
-        method:'POST',
+    // Mode toggle
+    const checkbox = document.getElementById('modeCheckbox');
+    fetch('/mode').then(r=>r.json()).then(j=>checkbox.checked = (j.mode==='auto'));
+    checkbox.addEventListener('change', ()=>{
+      const m = checkbox.checked?'auto':'manual';
+      fetch('/mode',{method:'POST',
         headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({mode})
+        body:JSON.stringify({mode:m})
       });
     });
 
-    // 3) RC카 제어 함수 (manual 모드에서만 실행)
-    function sendCmd(cmd) {
-      if (!checkbox.checked) {
-        fetch('/control', {
-          method: 'POST',
-          headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({cmd: cmd})
-        })
-        .then(res => res.json())
-        .then(json => console.log('Control response:', json))
-        .catch(err => console.error('Control error:', err));
+    // Manual control
+    function sendCmd(cmd){
+      if(!checkbox.checked){
+        fetch('/control',{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({cmd})
+        }).then(r=>r.json()).then(console.log).catch(console.error);
       }
     }
   </script>

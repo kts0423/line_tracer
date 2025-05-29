@@ -5,19 +5,20 @@ import cv2
 import yaml
 import threading
 import time
-import queue
 import os
 import signal
+import numpy as np
+from concurrent.futures import ProcessPoolExecutor
 from camera_control  import CameraController
-from preprocess      import Preprocessor
-from contour_tracker import ContourTracker
 from serial_comm     import SerialComm
 from flask import Flask, request, jsonify, render_template, Response
 
-# === 설정 파일 경로 & 자동 재로드 ===
+# === 설정 파일 & 전역 모드 ===
 CONFIG_PATH = "config.yaml"
+config      = yaml.safe_load(open(CONFIG_PATH))
+mode        = 'auto'
 _last_mtime = None
-config = {}
+running     = True
 
 def load_config():
     global config, _last_mtime
@@ -27,22 +28,12 @@ def load_config():
         _last_mtime = mtime
         print(f"[CONFIG] reloaded at {time.ctime(mtime)}")
 
-# === Flask 앱 설정 ===
+# === Flask 앱 & 엔드포인트 ===
 app = Flask(__name__, template_folder='../templates')
-mode = 'auto'  # 'auto' 또는 'manual'
 
 @app.route('/')
 def index():
     return render_template('index.html')
-
-@app.route('/config', methods=['GET'])
-def get_config():
-    return jsonify(config)
-
-@app.route('/reload', methods=['POST'])
-def reload_config():
-    load_config()
-    return jsonify(success=True, config=config)
 
 @app.route('/mode', methods=['GET', 'POST'])
 def handle_mode():
@@ -57,20 +48,6 @@ def handle_mode():
         return jsonify(success=False, error='invalid mode'), 400
     return jsonify(mode=mode)
 
-# MJPEG 비디오 스트림
-@app.route('/video_feed')
-def video_feed():
-    def gen():
-        while running:
-            frame = cam_ctl.get_frame()
-            ret, buf = cv2.imencode('.jpg', frame)
-            if not ret:
-                continue
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
-    return Response(gen(), mimetype='multipart/x-mixed-replace; boundary=frame')
-
-# Arduino 시리얼 모니터 스트림 (SSE)
 @app.route('/serial_stream')
 def serial_stream():
     def gen():
@@ -84,12 +61,11 @@ def serial_stream():
             time.sleep(0.05)
     return Response(gen(), mimetype='text/event-stream')
 
-# RC카 직접 제어 API (manual 모드용)
 @app.route('/control', methods=['POST'])
 def control():
     data = request.get_json() or {}
     cmd = data.get('cmd')
-    if cmd and comm.ser and mode == 'manual':
+    if mode == 'manual' and cmd and comm.ser:
         try:
             comm.ser.write(f"{cmd}\n".encode())
             return jsonify(success=True, cmd=cmd)
@@ -97,91 +73,119 @@ def control():
             return jsonify(success=False, error=str(e)), 500
     return jsonify(success=False, error='invalid command or mode'), 400
 
-# === 로그 파일 ===
-os.makedirs('logs', exist_ok=True)
-LOG_PATH = os.path.join('logs', f"run_{int(time.time())}.csv")
-with open(LOG_PATH, 'w') as f:
-    f.write('timestamp,error_x,exposure,gain,cx,roi_y\n')
+# === 워커 함수 (별도 프로세스) ===
+def process_frame_worker(frame, cfg, cfg_path):
+    import cv2, numpy as np
+    from preprocess      import Preprocessor
+    from contour_tracker import ContourTracker
 
-# === 안전 종료 제어 ===
-running = True
+    cam_cfg   = cfg['camera']
+    morph_cfg = cfg.get('morphology', {})
 
-def signal_handler(sig, frame):
+    # ROI 계산
+    h, w   = frame.shape[:2]
+    roi_h  = int(h * cam_cfg['roi_fraction'])
+    roi_y  = h - roi_h
+    roi    = frame[roi_y:h, :w]
+
+    # 전처리 & 컨투어
+    prep    = Preprocessor(cfg_path)
+    tracker = ContourTracker(cfg_path)
+    mask    = prep.process(roi)
+    cx, _   = tracker.track(mask, roi_y)
+
+    # error 계산
+    error_x = cx - (w // 2)
+
+    # 자동 튜닝: mask coverage 기반 kernel size
+    cov    = np.count_nonzero(mask) / mask.size
+    kernel = morph_cfg.get('kernel_size', 3)
+    if cov < 0.05:
+        kernel = max(3, kernel - 2)
+    elif cov > 0.2:
+        kernel = min(11, kernel + 2)
+
+    # ROI fraction 적응
+    offset_norm = abs(error_x) / (w // 2)
+    roi_frac    = cam_cfg['roi_fraction']
+    if offset_norm > 0.3:
+        roi_frac = min(0.5, roi_frac + 0.05)
+    else:
+        roi_frac = max(0.2, roi_frac - 0.01)
+
+    return error_x, cx, roi_y, tracker.alpha_cx, kernel, roi_frac
+
+# === 안전 종료 설정 ===
+def sig_handler(sig, frame):
     global running
     running = False
 
-signal.signal(signal.SIGINT, signal_handler)
-signal.signal(signal.SIGTERM, signal_handler)
+signal.signal(signal.SIGINT, sig_handler)
+signal.signal(signal.SIGTERM, sig_handler)
 
-if __name__ == '__main__':
-    # 설정 로드
+if __name__ == "__main__":
     load_config()
-
-    # 모듈 초기화
     cam_ctl = CameraController(CONFIG_PATH)
-    prep    = Preprocessor  (CONFIG_PATH)
-    tracker = ContourTracker(CONFIG_PATH)
-    comm    = SerialComm    (CONFIG_PATH)
+    comm    = SerialComm(CONFIG_PATH)
 
-    # 시리얼 전송 쓰레드 (자동 모드용)
-    q_err = queue.Queue()
-    def serial_thread():
-        while running:
-            try:
-                err = q_err.get(timeout=0.1)
-            except queue.Empty:
-                continue
-            comm.send(err)
-    th_serial = threading.Thread(target=serial_thread, daemon=True)
-    th_serial.start()
+    # Flask 서버 시작
+    threading.Thread(
+        target=lambda: app.run(host='0.0.0.0', port=5001, threaded=True),
+        daemon=True
+    ).start()
 
-    # Flask 서버 실행
-    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=5001, threaded=True), daemon=True).start()
+    # 워커 풀 생성
+    executor = ProcessPoolExecutor(max_workers=2)
+    futures  = []
 
-    prev_roi_y = None
     try:
         while running:
             load_config()
-            frame = cam_ctl.get_frame()
-            h, w = frame.shape[:2]
-            roi_h = int(h * config['camera']['roi_fraction'])
-            roi_y = h - roi_h
-            roi   = frame[roi_y:h, :w]
 
-            # 자동 노출
-            gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+            # 1) 프레임 캡처 & 크기 획득
+            frame = cam_ctl.get_frame()
+            h, w  = frame.shape[:2]
+
+            # 2) 자동 노출 (ROI 기반)
+            roi_h    = int(h * config['camera']['roi_fraction'])
+            roi_y    = h - roi_h
+            gray_roi = cv2.cvtColor(frame[roi_y:h, :w], cv2.COLOR_BGR2GRAY)
             cam_ctl.auto_adjust(gray_roi)
 
-            # 전처리
-            mask = prep.process(roi)
+            # 3) 워커에 처리 제출
+            futures.append(executor.submit(
+                process_frame_worker, frame, config, CONFIG_PATH
+            ))
 
-            # 라인트래킹
-            cx, prev_roi_y = tracker.track(mask, prev_roi_y)
-            error_x = cx - (w // 2)
+            # 4) 완료된 작업 수집
+            for f in futures.copy():
+                if f.done():
+                    futures.remove(f)
+                    err, cx, ry, a_cx, k, rf = f.result()
 
-            # 로그 기록
-            with open(LOG_PATH, 'a') as f:
-                f.write(f"{time.time()},{error_x},{cam_ctl.current_exp},"
-                        f"{cam_ctl.current_gain},{cx},{prev_roi_y}\n")
+                    # 5) 설정 값 업데이트
+                    config['smoothing']['alpha_cx']     = a_cx
+                    config['morphology']['kernel_size'] = k
+                    config['camera']['roi_fraction']    = rf
 
-            # 자동 모드인 경우에만 시리얼 전송
-            if mode == 'auto':
-                q_err.put(error_x)
+                    # 6) 자동 모드 시 시리얼 전송
+                    if mode == 'auto':
+                        comm.send(err)
 
-            # 디버그 화면
-            dbg = frame.copy()
-            cv2.rectangle(dbg, (0, roi_y), (w, h), (255,0,0), 2)
-            cv2.circle(dbg, (cx, prev_roi_y), 5, (0,255,0), -1)
-            cv2.putText(dbg, f"err={error_x}", (10,30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
-            cv2.imshow('LineTracer', dbg)
+                    # 7) 디버그 화면 표시
+                    dbg = frame.copy()
+                    cv2.rectangle(dbg, (0, ry), (w, h), (255,0,0), 2)
+                    cv2.circle(dbg, (cx, ry), 5, (0,255,0), -1)
+                    cv2.putText(dbg, f"err={err}", (10, 30),
+                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 2)
+                    cv2.imshow("LineTracer", dbg)
+
+            # 8) ESC 키로 종료
             if cv2.waitKey(1) & 0xFF == 27:
-                break
-    except Exception as e:
-        print('[ERROR]', e)
+                running = False
+
     finally:
-        running = False
-        th_serial.join()
+        executor.shutdown(wait=True)
         cam_ctl.stop()
         cv2.destroyAllWindows()
-        print('Exited.')
+        print("Exited.")
