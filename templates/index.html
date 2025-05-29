@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>라인 트레이서 대시보드</title>
+  <style>
+    body { font-family: sans-serif; display: flex; }
+    #video { width: 640px; border: 1px solid #ccc; }
+    #monitor { margin-left: 20px; width: 300px; height: 240px;
+               white-space: pre; background: #111; color: #0f0;
+               padding: 10px; overflow-y: scroll; border: 1px solid #ccc; }
+    #controls { margin-left: 20px; }
+    button { margin: 4px; padding: 8px 12px; }
+    #modeToggle { margin-bottom: 8px; }
+  </style>
+</head>
+<body>
+  <div>
+    <h3>실시간 영상</h3>
+    <img id="video" src="/video_feed" />
+  </div>
+  <div>
+    <h3>Arduino 시리얼 모니터</h3>
+    <div id="monitor"></div>
+  </div>
+  <div id="controls">
+    <h3>조작 모드</h3>
+    <label id="modeToggle">
+      <input type="checkbox" id="modeCheckbox" />
+      Auto Mode
+    </label>
+    <h3>RC카 제어</h3>
+    <button onclick="sendCmd('F')">Forward</button>
+    <button onclick="sendCmd('B')">Backward</button><br/>
+    <button onclick="sendCmd('L')">Left</button>
+    <button onclick="sendCmd('R')">Right</button><br/>
+    <button onclick="sendCmd('S')">Stop</button>
+  </div>
+
+  <script>
+    // 1) Serial SSE 구독
+    const evt = new EventSource("/serial_stream");
+    const mon = document.getElementById("monitor");
+    evt.onmessage = e => {
+      mon.textContent += e.data + "\n";
+      mon.scrollTop = mon.scrollHeight;
+    };
+
+    // 2) 모드 토글
+    const checkbox = document.getElementById("modeCheckbox");
+    // 초기 모드 조회
+    fetch('/mode').then(r=>r.json()).then(json=>{
+      checkbox.checked = (json.mode === 'auto');
+    });
+    checkbox.addEventListener('change', () => {
+      const mode = checkbox.checked ? 'auto' : 'manual';
+      fetch('/mode', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({mode})
+      });
+    });
+
+    // 3) RC카 제어 함수 (manual 모드에서만 실행)
+    function sendCmd(cmd) {
+      if (!checkbox.checked) {
+        fetch('/control', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({cmd: cmd})
+        })
+        .then(res => res.json())
+        .then(json => console.log('Control response:', json))
+        .catch(err => console.error('Control error:', err));
+      }
+    }
+  </script>
+</body>
+</html>
