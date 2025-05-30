@@ -12,115 +12,20 @@
       margin: 0;
       padding: 20px;
     }
-    h1, h2 { color: #00d8ff; }
-    button, input[type=range] {
-      margin: 4px;
-      padding: 10px;
-      font-size: 16px;
+    h1 {
+      color: #00d8ff;
     }
-    .status-box, .log-box {
-      background: #222;
-      margin: 10px auto;
-      padding: 10px;
+    img {
+      width: 90%;
       max-width: 640px;
-      border-radius: 8px;
-      text-align: left;
-    }
-    ul {
-      list-style: none;
-      padding: 0;
-      margin: 0;
-      font-size: 14px;
+      border: 2px solid #555;
     }
   </style>
 </head>
 <body>
 
   <h1>📷 실시간 스트리밍</h1>
-  <img src="{{ url_for('video_feed') }}" alt="Video Feed" width="90%" style="max-width: 640px; border: 2px solid #555;" />
-
-  <h2>🎮 수동 조작</h2>
-  <div>
-    <button onclick="send('FORWARD')">⬆ 전진</button><br>
-    <button onclick="send('LEFT')">⬅ 좌회전</button>
-    <button onclick="send('STOP')">⏹ 정지</button>
-    <button onclick="send('RIGHT')">➡ 우회전</button><br>
-    <button onclick="send('BACK')">⬇ 후진</button>
-  </div>
-
-  <h3>속도 조절 (FORWARD)</h3>
-  <input type="range" id="speedSlider" min="1460" max="1560" value="1560" oninput="updateSpeed()" />
-  <span id="speedVal">1560</span>
-
-  <h3>🔁 모드 선택</h3>
-  <button onclick="setMode('auto')">자동 모드</button>
-  <button onclick="setMode('manual')">수동 모드</button>
-
-  <div class="status-box">
-    <h4>📡 현재 상태</h4>
-    <p>모드: <span id="mode">-</span></p>
-    <p>최근 명령: <span id="last">-</span></p>
-    <p>속도: <span id="spd">-</span></p>
-  </div>
-
-  <div class="log-box">
-    <h4>📝 명령 로그</h4>
-    <ul id="log"></ul>
-  </div>
-
-  <div class="log-box">
-    <h4>🖨 아두이노 시리얼 모니터</h4>
-    <ul id="serialBox"></ul>
-  </div>
-
-  <script>
-    function send(cmd) {
-      const speed = document.getElementById("speedSlider").value;
-      fetch(`/control?cmd=${cmd}&speed=${speed}`);
-    }
-
-    function setMode(type) {
-      fetch(`/mode?type=${type}`);
-    }
-
-    function updateSpeed() {
-      const speed = document.getElementById("speedSlider").value;
-      document.getElementById("speedVal").innerText = speed;
-    }
-
-    function updateStatus() {
-      fetch("/status").then(res => res.json()).then(data => {
-        document.getElementById("mode").innerText = data.mode;
-        document.getElementById("last").innerText = data.last_cmd;
-        document.getElementById("spd").innerText = data.speed;
-        const logEl = document.getElementById("log");
-        logEl.innerHTML = "";
-        data.log.forEach(line => {
-          const li = document.createElement("li");
-          li.innerText = line;
-          logEl.appendChild(li);
-        });
-      });
-    }
-
-    function updateSerialLog() {
-      fetch("/serial_log").then(res => res.json()).then(data => {
-        const box = document.getElementById("serialBox");
-        box.innerHTML = "";
-        data.forEach(line => {
-          const li = document.createElement("li");
-          li.innerText = line;
-          box.appendChild(li);
-        });
-        box.scrollTop = box.scrollHeight;
-      });
-    }
-
-    setInterval(() => {
-      updateStatus();
-      updateSerialLog();
-    }, 1000);
-  </script>
+  <img src="{{ url_for('video_feed') }}" alt="Video Feed">
 
 </body>
 </html>
