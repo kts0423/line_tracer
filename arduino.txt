@@ -1,0 +1,67 @@
+#include <Servo.h>
+
+// 핀 설정
+const int SERVO_PIN = 9;   // 조향 서보
+const int ESC_PIN = 10;    // 주행 ESC
+
+Servo steeringServo;
+Servo driveESC;
+
+String input = "";
+bool auto_mode = false;
+int steer_offset = 0;
+const int CENTER_ANGLE = 90;
+
+void setup() {
+  Serial.begin(9600);
+  steeringServo.attach(SERVO_PIN);
+  driveESC.attach(ESC_PIN);
+
+  steeringServo.write(CENTER_ANGLE);
+  driveESC.writeMicroseconds(1500); // 정지
+  delay(2000);
+  Serial.println("✅ RC카 준비 완료");
+}
+
+void loop() {
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == '\n') {
+      handleCommand(input);
+      input = "";
+    } else {
+      input += c;
+    }
+  }
+
+  if (auto_mode) {
+    int angle = CENTER_ANGLE - steer_offset;
+    angle = constrain(angle, 45, 135);
+    steeringServo.write(angle);
+
+    int speed = (steer_offset == 9999) ? 1460 : 1560;
+    driveESC.writeMicroseconds(speed);
+  }
+}
+
+void handleCommand(String cmd) {
+  cmd.trim();
+  Serial.print("📩 수신: ");
+  Serial.println(cmd);
+
+  if (cmd == "MODE:AUTO") {
+    auto_mode = true;
+    Serial.println("🚗 자동 주행 시작");
+  } else if (cmd.startsWith("E:")) {
+    String val = cmd.substring(2);
+    if (val == "9999") {
+      steer_offset = 9999; // 선을 못 찾았다는 표시
+    } else {
+      steer_offset = val.toInt();
+    }
+    Serial.print("↪ 조향 오차: ");
+    Serial.println(steer_offset);
+  } else {
+    Serial.println("⚠️ 알 수 없는 명령");
+  }
+}

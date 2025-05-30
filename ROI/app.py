@@ -17,9 +17,9 @@ try:
     picam2.start()
     time.sleep(1)
 except:
-    print("⚠ Picamera2 초기화 실패")
+    print("[WARN] Picamera2 initialization failed")
 
-# 시리얼 통신 설정
+# 시리얼 포트 자동 탐색
 def find_arduino_port():
     ports = list(serial.tools.list_ports.comports())
     for p in ports:
@@ -33,9 +33,9 @@ if arduino_port:
     try:
         ser = serial.Serial(arduino_port, 9600, timeout=1)
         time.sleep(2)
-        print(f"✅ 아두이노 연결됨: {arduino_port}")
+        print(f"[OK] Arduino connected on {arduino_port}")
     except:
-        print("❌ 아두이노 시리얼 연결 실패")
+        print("[ERROR] Failed to connect to Arduino")
 
 control_queue = queue.Queue()
 
@@ -44,7 +44,7 @@ def serial_worker():
         if ser:
             try:
                 cmd = control_queue.get(timeout=1)
-                ser.write(cmd.encode())
+                ser.write(cmd.encode('ascii'))  # ASCII 인코딩
             except queue.Empty:
                 pass
         time.sleep(0.01)
@@ -52,7 +52,7 @@ def serial_worker():
 threading.Thread(target=serial_worker, daemon=True).start()
 
 def send_control_async(err_filtered):
-    err_filtered = max(-50, min(50, err_filtered))
+    err_filtered = max(-50, min(50, err_filtered)) if err_filtered != 9999 else 9999
     cmd = f"E:{err_filtered}\n"
     control_queue.put(cmd)
 
@@ -89,20 +89,19 @@ def gen():
         h, w = frame.shape[:2]
         center_x = w // 2
 
-        # ROI 영역 설정
+        # ROI 설정
         roi_y = int(h * 0.55)
         roi_h = int(h / 6)
         roi = frame[roi_y:roi_y + roi_h, :]
 
         gray = cv2.cvtColor(roi, cv2.COLOR_RGB2GRAY)
         blur = cv2.GaussianBlur(gray, (5, 5), 0)
-        binary = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                       cv2.THRESH_BINARY_INV, 11, 2)
+        _, binary = cv2.threshold(blur, 100, 255, cv2.THRESH_BINARY_INV)
 
         cx, contour = find_line_center(binary)
 
         if cx == -1:
-            err_filtered = 9999  # 선을 못 찾음
+            err_filtered = 9999
         else:
             err = cx - center_x
             err_filtered = int(alpha * last_err + (1 - alpha) * err)
@@ -111,12 +110,13 @@ def gen():
             cv2.drawContours(roi, [contour], -1, (0, 255, 0), 2)
             cv2.circle(roi, (cx, roi_h // 2), 5, (255, 0, 0), -1)
 
+        print(f"[ERR] err_filtered = {err_filtered}")
+        send_control_async(err_filtered)
+
         # 시각적 표시
         cv2.line(roi, (center_x, 0), (center_x, roi_h), (0, 0, 255), 1)
         frame[roi_y:roi_y + roi_h, :] = roi
         cv2.putText(frame, f"err = {err_filtered}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
-
-        send_control_async(err_filtered)
 
         ret, jpeg = cv2.imencode('.jpg', cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
         if not ret:

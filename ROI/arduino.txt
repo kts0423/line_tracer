@@ -1,29 +1,24 @@
 #include <Servo.h>
 
-const int SERVO_PIN = 9;
-const int ESC_PIN = 10;
+// 핀 설정
+const int SERVO_PIN = 9;   // 조향 서보
+const int ESC_PIN = 10;    // 주행 ESC
 
 Servo steeringServo;
 Servo driveESC;
 
 String input = "";
-const int steering_center = 90;
-const int esc_stop = 1500;
-const int esc_forward = 1560;
-const int esc_backward = 1460;
-
-String currentMode = "auto"; // 기본은 자동
+const int CENTER_ANGLE = 90;
 
 void setup() {
   Serial.begin(9600);
   steeringServo.attach(SERVO_PIN);
   driveESC.attach(ESC_PIN);
 
-  steeringServo.write(steering_center);
-  driveESC.writeMicroseconds(esc_stop);
+  steeringServo.write(CENTER_ANGLE);
+  driveESC.writeMicroseconds(1500);  // 정지
   delay(2000);
-
-  Serial.println("✅ RC카 준비 완료");
+  Serial.println("[OK] RC Car Ready (Auto Drive Mode)");
 }
 
 void loop() {
@@ -40,45 +35,32 @@ void loop() {
 
 void handleCommand(String cmd) {
   cmd.trim();
-  Serial.print("📩 수신: ");
+  Serial.print("[RX] ");
   Serial.println(cmd);
 
-  if (cmd == "MODE:MANUAL") {
-    currentMode = "manual";
-    Serial.println("🎮 수동 모드 전환됨");
-  } else if (cmd == "MODE:AUTO") {
-    currentMode = "auto";
-    Serial.println("🔁 자동 모드 전환됨");
-  } else if (cmd.startsWith("E:")) {
-    if (currentMode == "auto") {
-      int eIdx = cmd.indexOf("E:");
-      int sIdx = cmd.indexOf("S:");
-      if (eIdx != -1 && sIdx != -1) {
-        int err = cmd.substring(eIdx + 2, sIdx).toInt();
-        int speed = cmd.substring(sIdx + 2).toInt();
+  if (cmd.startsWith("E:")) {
+    String val = cmd.substring(2);
+    int angle;
+    int speed;
 
-        int steer_angle = steering_center - err;
-        steer_angle = constrain(steer_angle, 45, 135);
-        int esc_val = constrain(speed, esc_backward, esc_forward);
-
-        steeringServo.write(steer_angle);
-        driveESC.writeMicroseconds(esc_val);
-
-        Serial.print("↪ 조향:");
-        Serial.print(steer_angle);
-        Serial.print(" / 속도:");
-        Serial.println(esc_val);
-      }
+    if (val == "9999") {
+      angle = CENTER_ANGLE;  // 중립 조향
+      speed = 1460;          // 후진
     } else {
-      Serial.println("🚫 자동 모드 아님, 무시됨");
+      int err = val.toInt();
+      angle = CENTER_ANGLE - constrain(err, -50, 50);
+      speed = 1560;          // 전진
     }
-  } else if (cmd == "STOP") {
-    driveESC.writeMicroseconds(esc_stop);
-    Serial.println("🛑 정지");
-  } else if (cmd == "BACK") {
-    driveESC.writeMicroseconds(esc_backward);
-    Serial.println("🔙 후진");
+
+    angle = constrain(angle, 45, 135);
+    steeringServo.write(angle);
+    driveESC.writeMicroseconds(speed);
+
+    Serial.print("[CMD] Angle: ");
+    Serial.print(angle);
+    Serial.print(" | Speed: ");
+    Serial.println(speed);
   } else {
-    Serial.println("⚠️ 알 수 없는 명령");
+    Serial.println("[WARN] Unknown command");
   }
 }
