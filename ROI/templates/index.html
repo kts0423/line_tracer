@@ -5,27 +5,49 @@
   <title>RC카 라인트레이서</title>
   <style>
     body {
+      background-color: #1e1e1e;
+      color: #fff;
       font-family: sans-serif;
-      background: #111;
-      color: #eee;
       text-align: center;
-      margin: 0;
       padding: 20px;
-    }
-    h1 {
-      color: #00d8ff;
     }
     img {
       width: 90%;
       max-width: 640px;
-      border: 2px solid #555;
+      border: 3px solid #fff;
+    }
+    .log-box {
+      background: #2e2e2e;
+      padding: 10px;
+      margin-top: 20px;
+      height: 200px;
+      overflow-y: scroll;
+      font-family: monospace;
+      font-size: 14px;
+      text-align: left;
     }
   </style>
 </head>
 <body>
+  <h1>📷 RC카 라인트레이서 실시간 화면</h1>
+  <img src="{{ url_for('video_feed') }}" alt="Video Stream">
 
-  <h1>📷 실시간 스트리밍</h1>
-  <img src="{{ url_for('video_feed') }}" alt="Video Feed">
+  <div class="log-box">
+    <b>📜 시리얼 로그:</b><br>
+    <span id="logs">로딩 중...</span>
+  </div>
 
+  <script>
+    async function fetchLogs() {
+      try {
+        const res = await fetch("/log_data");
+        const data = await res.json();
+        document.getElementById("logs").innerHTML = data.slice(-20).reverse().join("<br>");
+      } catch (e) {
+        document.getElementById("logs").innerText = "⚠ 로그 로드 실패";
+      }
+    }
+    setInterval(fetchLogs, 1000);
+  </script>
 </body>
 </html>
