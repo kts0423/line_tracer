@@ -82,11 +82,11 @@ def gen_frames():
         frame = picam2.capture_array()
         h, w, _ = frame.shape
 
-        # 1) ROI 설정: 화면 세로의 30%~50%, 가로 중앙 1/3
-        roi_top = int(h * 0.3)
+        # 1) ROI 설정: 화면 세로의 30%~80%, 가로 전체
+        roi_top = int(h * 0.1)
         roi_bottom = int(h * 0.8)
-        roi_width = w // 1
-        roi_x = (w - roi_width) // 2
+        roi_width = w
+        roi_x = 0
         roi = frame[roi_top:roi_bottom, roi_x:roi_x + roi_width]
 
         # 2) 그레이스케일 + 블러
@@ -126,7 +126,7 @@ def gen_frames():
 
                 # (B) 벡터 절대 각도 & 수직 아래(π/2) 차이 계산
                 angle_line = math.atan2(vy, vx)
-                angle_des  = math.pi / 2
+                angle_des = math.pi / 2
                 angle_error = angle_line - angle_des
                 if angle_error > math.pi:
                     angle_error -= 2 * math.pi
@@ -143,7 +143,7 @@ def gen_frames():
                 offset_x = cx - (roi_width // 2)
 
                 # (D) 보정 계수 설정
-                gain_angle  = 30.0
+                gain_angle = 30.0
                 gain_offset = 0.5
 
                 # (E) 작은 각도 무시 (±5° 이내)
@@ -154,9 +154,9 @@ def gen_frames():
 
                 offset_total = int(offset_x * gain_offset)
 
-                # (F) 최종 steer_angle 계산 (50~130으로 제한)
+                # (F) 최종 steer_angle 계산 (0~180으로 제한)
                 steer_angle = 90 + int_error_angle + offset_total
-                steer_angle = max(50, min(130, steer_angle))
+                steer_angle = max(0, min(180, steer_angle))
 
                 direction = "F"
 
