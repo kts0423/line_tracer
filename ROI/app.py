@@ -11,15 +11,17 @@ import math
 
 app = Flask(__name__)
 
-# ─────── PiCamera 세팅 (320×240)
+# ─────────────────────────────────────────────────────────────────────────────
+# PiCamera 세팅 (320×240)
 picam2 = Picamera2()
 picam2.configure(picam2.create_preview_configuration(
     main={"format": "RGB888", "size": (320, 240)}
 ))
 picam2.start()
-time.sleep(2)  # 카메라 안정화 대기
+time.sleep(2)  # 카메라 워밍업
 
-# ─────── 아두이노 포트 자동 검색 및 연결
+# ─────────────────────────────────────────────────────────────────────────────
+# 아두이노 포트 자동 검색
 def find_arduino_port():
     ports = list(serial.tools.list_ports.comports())
     print("[DEBUG] 연결된 시리얼 포트:")
@@ -35,38 +37,44 @@ port = find_arduino_port()
 ser = None
 if port:
     try:
-        ser = serial.Serial(port, 9600, timeout=1)
-        print(f"[OK] Arduino connected on {port}")
+        # 시리얼 속도를 115200 bps로 맞춤
+        ser = serial.Serial(port, 115200, timeout=1)
+        print(f"[OK] Arduino connected on {port} at 115200 bps")
         time.sleep(2)
     except Exception as e:
         print(f"[ERROR] Arduino connection failed: {e}")
 else:
     print("[WARN] No Arduino port found.")
 
-# ─────── 시리얼 송신 전용 쓰레드
+# ─────────────────────────────────────────────────────────────────────────────
+# 시리얼 전송 전용 쓰레드
 control_queue = queue.Queue()
 serial_logs = []
 
 def serial_worker():
     while True:
         try:
-            cmd = control_queue.get(timeout=1)
+            cmd = control_queue.get(timeout=0.1)
             if ser:
                 ser.write(cmd.encode('ascii'))
                 serial_logs.append(f"[SEND] {cmd.strip()}")
+                # 로그를 최대 100줄만 보관
                 serial_logs[:] = serial_logs[-100:]
         except queue.Empty:
             pass
-        time.sleep(0.5)
+        # 짧은 sleep으로 버퍼 오버플로우 방지
+        time.sleep(0.01)
 
 threading.Thread(target=serial_worker, daemon=True).start()
 
-# ─────── ESC 초기화 대기 시간 (초 단위)
+# ─────────────────────────────────────────────────────────────────────────────
+# ESC 초기화 대기 시간 (초 단위)
 ESC_INIT_DELAY = 5
 start_time = time.time()
 last_send_time = 0
 
-# ─────── 라인트레이서 처리 (벡터+오프셋 기반 + 흑백 클린마스크 시각화)
+# ─────────────────────────────────────────────────────────────────────────────
+# 라인트레이서 처리 (벡터+오프셋 기반 + 흑백 클린마스크 시각화)
 def gen_frames():
     global last_send_time
 
@@ -76,8 +84,8 @@ def gen_frames():
 
         # 1) ROI 설정: 화면 세로의 30%~50%, 가로 중앙 1/3
         roi_top = int(h * 0.3)
-        roi_bottom = int(h * 0.5)
-        roi_width = w // 3
+        roi_bottom = int(h * 0.8)
+        roi_width = w // 1
         roi_x = (w - roi_width) // 2
         roi = frame[roi_top:roi_bottom, roi_x:roi_x + roi_width]
 
@@ -85,7 +93,7 @@ def gen_frames():
         gray = cv2.cvtColor(roi, cv2.COLOR_RGB2GRAY)
         gray = cv2.GaussianBlur(gray, (3, 3), 0)
 
-        # 3) Adaptive Threshold → binary
+        # 3) Adaptive Threshold (검은 선 → 흰색)
         binary = cv2.adaptiveThreshold(
             gray, 255,
             cv2.ADAPTIVE_THRESH_MEAN_C,
@@ -101,11 +109,11 @@ def gen_frames():
         # 5) 컨투어 찾기
         contours, _ = cv2.findContours(clean_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        # 기본값: 선 없으면 정지
+        # 기본값: 선이 없으면 정지
         direction = "S"
         steer_angle = 90
 
-        # ESC 초기화(5초) 지난 뒤에만 주행 제어
+        # ESC 초기화(5초) 이후부터 주행 제어
         if time.time() - start_time >= ESC_INIT_DELAY and len(contours) > 0:
             largest = max(contours, key=cv2.contourArea)
             area = cv2.contourArea(largest)
@@ -113,7 +121,6 @@ def gen_frames():
                 # (A) fitLine → 벡터(vx,vy), 점(x0,y0)
                 vx, vy, x0, y0 = cv2.fitLine(largest, cv2.DIST_L2, 0, 0.01, 0.01)
                 vx, vy = float(vx), float(vy)
-                # 벡터 방향 안정화: 항상 아래쪽(양수 vy)으로 통일
                 if vy < 0:
                     vx, vy = -vx, -vy
 
@@ -130,16 +137,16 @@ def gen_frames():
                 # (C) 컨투어 중심 기반 수평 오프셋 계산
                 M = cv2.moments(largest)
                 if M["m00"] != 0:
-                    cx = int(M["m10"] / M["m00"])  # ROI 내부 x 좌표
+                    cx = int(M["m10"] / M["m00"])
                 else:
                     cx = roi_width // 2
-                offset_x = cx - (roi_width // 2)  # 양수=선이 오른쪽, 음수=선이 왼쪽
+                offset_x = cx - (roi_width // 2)
 
-                # (D) 각도 보정 계수 및 오프셋 보정 계수
-                gain_angle  = 30.0   # 기울기 보정 비율(%)
-                gain_offset = 0.5    # 픽셀당 보정 각도(도)
+                # (D) 보정 계수 설정
+                gain_angle  = 30.0
+                gain_offset = 0.5
 
-                # (E) 작은 각도 무시 (±5° 이내 → 0)
+                # (E) 작은 각도 무시 (±5° 이내)
                 if abs(deg_error) < 5.0:
                     int_error_angle = 0
                 else:
@@ -147,9 +154,8 @@ def gen_frames():
 
                 offset_total = int(offset_x * gain_offset)
 
-                # (F) 최종 steer_angle 계산: 90 + 기울기 보정 + 오프셋 보정
+                # (F) 최종 steer_angle 계산 (50~130으로 제한)
                 steer_angle = 90 + int_error_angle + offset_total
-                # 50~130 범위로 제한
                 steer_angle = max(50, min(130, steer_angle))
 
                 direction = "F"
@@ -170,32 +176,30 @@ def gen_frames():
                 drawCY = roi_top + (roi_bottom - roi_top) // 2
                 cv2.circle(frame, (drawCX, drawCY), 5, (0, 0, 255), -1)
             else:
-                # 컨투어 너무 작으면 정지 + 마스크 표시
                 steer_angle = 90
                 direction = "S"
                 mask_bgr = cv2.cvtColor(clean_mask, cv2.COLOR_GRAY2BGR)
                 frame[roi_top:roi_bottom, roi_x:roi_x + roi_width] = mask_bgr
         else:
-            # 초기 5초 동안 정지 + 흑백 마스크 표시
             steer_angle = 90
             direction = "S"
             mask_bgr = cv2.cvtColor(clean_mask, cv2.COLOR_GRAY2BGR)
             frame[roi_top:roi_bottom, roi_x:roi_x + roi_width] = mask_bgr
 
-        # (H) 0.5초 간격으로 시리얼 전송
+        # (H) 주행 명령을 매 0.5초마다 전송
         current_time = time.time()
         if current_time - last_send_time >= 0.5:
             cmd = f"E:{steer_angle} D:{direction}\n"
             control_queue.put(cmd)
             last_send_time = current_time
 
-        # (I) 디버그용 ROI 테두리 + 텍스트
+        # (I) 디버그용 텍스트 + 테두리
         dir_text = f"Angle:{steer_angle} Dir:{direction}"
         cv2.rectangle(frame, (roi_x, roi_top), (roi_x + roi_width, roi_bottom), (255, 0, 0), 2)
         cv2.putText(frame, dir_text, (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
-        # (J) 최종 스트림 인코딩
+        # (J) 스트림 인코딩 & 출력
         frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
         ret, buffer = cv2.imencode('.jpg', frame_bgr)
         if not ret:
