@@ -1,4 +1,4 @@
-from flask import Flask, render_template, Response, jsonify
+from flask import Flask, render_template, Response, jsonify, request
 from picamera2 import Picamera2
 import cv2
 import numpy as np
@@ -12,7 +12,7 @@ import math
 app = Flask(__name__)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PiCamera 세팅 (160×120) – 해상도를 절반으로 줄임
+# PiCamera 세팅 (160×120)
 picam2 = Picamera2()
 picam2.configure(picam2.create_preview_configuration(
     main={"format": "RGB888", "size": (160, 120)}
@@ -74,10 +74,13 @@ last_steer_angle = 90
 # 마지막에 정상적으로 인식된 라인 중심 X 좌표 (ROI 기준)
 last_cx = None
 
+# 자동주행이 켜져 있는지 여부 (초기값 False)
+is_running = False
+
 # ─────────────────────────────────────────────────────────────────────────────
 # gen_frames(): ROI 조정 + 그레이스케일 기반 이진화 + 필터링 + “앞쪽 예측” 강화 + 0~180 steer
 def gen_frames():
-    global last_send_time, last_steer_angle, last_cx
+    global last_send_time, last_steer_angle, last_cx, is_running, start_time
 
     while True:
         frame = picam2.capture_array()
@@ -91,7 +94,6 @@ def gen_frames():
         roi_x = 0
         roi = frame[roi_top:roi_bottom, roi_x:roi_x + roi_width]
 
-        # ──────────────────────────────────────────────────────────────
         # 2) 그레이스케일 변환 + 블러 → Adaptive Threshold 이진화
         gray = cv2.cvtColor(roi, cv2.COLOR_RGB2GRAY)
         gray_blur = cv2.GaussianBlur(gray, (3, 3), 0)
@@ -110,7 +112,7 @@ def gen_frames():
             clean_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
         )
 
-        # 필터링된 컨투어만 보관 (버그 방지용 필터 추가는 생략하거나, 원하는 경우 재사용)
+        # 필터링된 컨투어만 보관
         valid_contours = []
         for cnt in all_contours:
             area = cv2.contourArea(cnt)
@@ -134,110 +136,80 @@ def gen_frames():
 
             valid_contours.append((cnt, cx, cy, area))
 
-        # 기본값: 선을 못 찾으면 이전 steer_angle 유지, 전진
+        # 기본 steer/방향 값
         direction = "F"
         steer_angle = last_steer_angle
 
-        # ESC 초기화(5초) 이후부터만 주행 제어
-        if time.time() - start_time >= ESC_INIT_DELAY and valid_contours:
-            # 4) 필터링된 컨투어 중 면적이 가장 큰 것만 선택
-            cnt, cx, cy, area = max(valid_contours, key=lambda x: x[3])
-
-            # (A) 현재 라인 방향 벡터 구하기 (fitLine)
-            vx, vy, x0, y0 = cv2.fitLine(cnt, cv2.DIST_L2, 0, 0.01, 0.01)
-            vx, vy = float(vx), float(vy)
-            if vy < 0:
-                vx, vy = -vx, -vy  # 항상 위쪽으로 향하도록
-
-            # (B) 라인이 화면 밖으로 연장될 때 X 좌표 예측 (lookahead)
-            #    - (x0, y0)는 fitLine에서 나온 라인 상의 한 점(ROI 기준 좌표)
-            #    - (vx, vy)는 그 라인이 향하는 단위 벡터
-            #    - 우리는 이 벡터를 ROI 상단(앞쪽)까지 연장했을 때, 
-            #      예상되는 X 위치를 예측하고 싶다.
-            #
-            #    ROI 기준 좌표계를 (0,0)이 ROI 상단이고, y축이 아래 방향으로 증가한다고 가정.
-            #    fitLine은 ROI 전체 좌표계(roi_top 픽셀 기준)에서 x0,y0를 반환하지만,
-            #    편의상 ROI 내 상대 좌표로 바꿔줍니다:
-            y0_rel = y0  # 이미 ROI 내 상대 Y 좌표
-            x0_rel = x0  # ROI 내 상대 X 좌표
-            #    ROI 상단(앞쪽)은 y=0이므로, 우리가 예측하는 lookahead y 위치는 y = 0 (ROI 상단).
-            #    벡터 (vx, vy) 방향으로 y0_rel → 0 (Δy = -y0_rel)만큼 이동해야 할 거리 t:
-            #        t = -y0_rel / vy  (vy는 양수라고 가정)
-            if vy != 0:
-                t = -y0_rel / vy
-            else:
-                t = 0  # vy=0인 경우 거의 수직인지 애매하므로 t=0으로 처리
-
-            #    lookahead_x_rel = x0_rel + vx * t
-            lookahead_x_rel = x0_rel + vx * t
-
-            # (C) lookahead_offset: 예측 지점이 ROI 중앙에서 얼마나 벗어나는지
-            lookahead_offset = lookahead_x_rel - (roi_width / 2)
-
-            # (D) 현재 중심 오프셋: cx_rel - (roi_width/2)
-            curr_offset = cx - (roi_width / 2)
-
-            # (E) 두 오프셋을 섞어서 steer_angle 계산
-            #    예를 들어, curr_offset은 현재 가까운 위치에서의 보정, 
-            #    lookahead_offset은 멀리서의 선행 꺾임 예측 보정 역할을 함.
-            #
-            #    gain_offset: 가까운 거리 보정 계수
-            #    gain_lookahead: 앞쪽 예측 보정 계수 (더 공격적으로 꺾으려면 크게)
-            gain_offset = 0.5
-            gain_lookahead = 1.5  # 기본보다 3배 강하게 꺾도록 세팅 (환경에 맞춰 조정)
-
-            total_offset = int(curr_offset * gain_offset + lookahead_offset * gain_lookahead)
-
-            # (F) fitLine 각도 오차 기반 보정 (기존 방식)
-            angle_line = math.atan2(vy, vx)
-            angle_des = math.pi / 2
-            angle_error = angle_line - angle_des
-            if angle_error > math.pi:
-                angle_error -= 2 * math.pi
-            elif angle_error < -math.pi:
-                angle_error += 2 * math.pi
-            deg_error = angle_error * (180.0 / math.pi)
-
-            # (G) 작은 각도 무시 (±5° 이내)
-            if abs(deg_error) < 5.0:
-                int_error_angle = 0
-            else:
-                gain_angle = 30.0  # 고정된 각도 보정 계수
-                int_error_angle = int(deg_error * (gain_angle / 100.0))
-
-            # (H) 최종 steer_angle 계산 (0~180)
-            steer_angle = 90 + int_error_angle + total_offset
-            steer_angle = max(0, min(180, steer_angle))
-            direction = "F"
-            last_steer_angle = steer_angle
-
-            # 정상 인식된 cx를 저장
-            last_cx = cx
+        # 초기화 시간(5초) 이내는 정지
+        if time.time() - start_time < ESC_INIT_DELAY or not is_running:
+            steer_angle = 90
+            direction = "S"
         else:
-            # 필터링된 컨투어가 없으면 이전 steer_angle 유지하거나 초기화 직후 정지
-            if time.time() - start_time < ESC_INIT_DELAY:
-                steer_angle = 90
-                direction = "S"
+            # 자동주행 켜져 있고 초기화 시간 경과 후 컨투어가 있을 때
+            if valid_contours:
+                cnt, cx, cy, area = max(valid_contours, key=lambda x: x[3])
+
+                # (A) 현재 라인 방향 벡터 구하기 (fitLine)
+                vx, vy, x0, y0 = cv2.fitLine(cnt, cv2.DIST_L2, 0, 0.01, 0.01)
+                vx, vy = float(vx), float(vy)
+                if vy < 0:
+                    vx, vy = -vx, -vy  # 항상 위쪽으로 향하도록
+
+                # lookahead 예측을 위해 ROI 기준 상대 좌표
+                x0_rel = x0
+                y0_rel = y0
+
+                # (B) 라인이 화면 밖으로 연장될 때 X 좌표 예측 (lookahead)
+                if vy != 0:
+                    t = -y0_rel / vy
+                else:
+                    t = 0
+                lookahead_x_rel = x0_rel + vx * t
+
+                # (C) lookahead_offset: 예측 지점이 ROI 중앙에서 얼마나 벗어나는지
+                lookahead_offset = lookahead_x_rel - (roi_width / 2)
+
+                # (D) 현재 중심 오프셋: cx - (roi_width/2)
+                curr_offset = cx - (roi_width / 2)
+
+                # (E) 두 오프셋을 섞어서 steer_angle 계산
+                gain_offset = 0.5
+                gain_lookahead = 1.5
+                total_offset = int(curr_offset * gain_offset + lookahead_offset * gain_lookahead)
+
+                # (F) fitLine 각도 오차 기반 보정
+                angle_line = math.atan2(vy, vx)
+                angle_des = math.pi / 2
+                angle_error = angle_line - angle_des
+                if angle_error > math.pi:
+                    angle_error -= 2 * math.pi
+                elif angle_error < -math.pi:
+                    angle_error += 2 * math.pi
+                deg_error = angle_error * (180.0 / math.pi)
+
+                # (G) 작은 각도 무시
+                if abs(deg_error) < 5.0:
+                    int_error_angle = 0
+                else:
+                    gain_angle = 30.0
+                    int_error_angle = int(deg_error * (gain_angle / 100.0))
+
+                # (H) 최종 steer_angle 계산
+                steer_angle = 90 + int_error_angle + total_offset
+                steer_angle = max(0, min(180, steer_angle))
+                direction = "F"
+                last_steer_angle = steer_angle
+
+                # 정상 인식된 cx 저장
+                last_cx = cx
             else:
+                # 컨투어가 없으면 이전 steer_angle 유지, 전진
                 steer_angle = last_steer_angle
                 direction = "F"
 
-        # (I) 시각화: ROI 내부에 clean_mask(흑백)를 RGB로 변환해 덮어쓰기
+        # (I) 시각화: ROI 내부에 clean_mask(흑백)를 RGB로 덮어쓰기
         mask_rgb = cv2.cvtColor(clean_mask, cv2.COLOR_GRAY2RGB)
         frame[roi_top:roi_bottom, roi_x:roi_x + roi_width] = mask_rgb
-
-        # VGA 시각화를 위해, 현재 fitLine 벡터도 그려봄
-        if valid_contours:
-            # (x0_rel, y0_rel)을 ROI 기준 좌표 → 전체 프레임 좌표로 변환
-            draw_x0 = int(x0_rel + roi_x)
-            draw_y0 = int(y0_rel + roi_top)
-            draw_x1 = int(draw_x0 + vx * 50)
-            draw_y1 = int(draw_y0 + vy * 50)
-            cv2.line(frame, (draw_x0, draw_y0), (draw_x1, draw_y1), (0, 255, 0), 2)
-            # lookahead 지점을 시각화 (예측 지점이 ROI 상단, x좌표 lookahead_x_rel)
-            look_x = int(lookahead_x_rel + roi_x)
-            look_y = roi_top  # ROI 최상단
-            cv2.circle(frame, (look_x, look_y), 5, (0, 0, 255), -1)
 
         # (J) 시리얼 송신 (0.1초 간격)
         current_time = time.time()
@@ -247,12 +219,12 @@ def gen_frames():
             last_send_time = current_time
 
         # (K) 디버그용 텍스트 + 테두리
-        dir_text = f"Angle:{steer_angle} Dir:{direction}"
+        dir_text = f"Run:{'On' if is_running else 'Off'} Angle:{steer_angle} Dir:{direction}"
         cv2.rectangle(frame, (roi_x, roi_top), (roi_x + roi_width, roi_bottom), (255, 0, 0), 2)
-        cv2.putText(frame, dir_text, (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        cv2.putText(frame, dir_text, (5, 15),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
-        # (L) 최종 스트림 인코딩 & 출력
+        # (L) 스트림 인코딩 & 출력
         frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
         ret, buffer = cv2.imencode('.jpg', frame_bgr)
         if not ret:
@@ -261,6 +233,7 @@ def gen_frames():
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
 
+# ─────────────────────────────────────────────────────────────────────────────
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -273,5 +246,22 @@ def video_feed():
 def log_data():
     return jsonify(serial_logs)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 시작 POST 엔드포인트
+@app.route('/start', methods=['POST'])
+def start_driving():
+    global is_running, start_time
+    is_running = True
+    start_time = time.time()  # ESC 초기화 시간 리셋
+    return jsonify({"status": "running"})
+
+# 정지 POST 엔드포인트
+@app.route('/stop', methods=['POST'])
+def stop_driving():
+    global is_running
+    is_running = False
+    return jsonify({"status": "stopped"})
+
+# ─────────────────────────────────────────────────────────────────────────────
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False)

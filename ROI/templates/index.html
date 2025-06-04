@@ -1,79 +1,100 @@
+<!-- templates/index.html -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>RC카 벡터 기반 라인트레이서</title>
+  <title>RC카 자율주행</title>
   <style>
     body {
-      background-color: #111;
-      color: #eee;
-      font-family: Arial, sans-serif;
+      background: #1f1f1f;
+      color: #e0e0e0;
+      font-family: sans-serif;
       text-align: center;
       margin: 0;
-      padding: 0;
-    }
-    .container {
       padding: 20px;
     }
-    h1 {
-      margin-bottom: 10px;
+    h2 {
+      margin-bottom: 20px;
     }
-    .video-container {
-      display: inline-block;
-      border: 2px solid #444;
+    .btn {
+      padding: 12px 24px;
+      margin: 10px;
+      font-size: 16px;
+      cursor: pointer;
+      border: none;
+      border-radius: 5px;
+      transition: background 0.2s;
     }
-    img {
-      width: 640px; /* 320×240 영상을 2배로 확대 */
-      height: 480px;
-      background-color: #000;
+    .btn-start {
+      background-color: #ff9800;
+      color: #fff;
     }
-    .log-box {
+    .btn-start:hover {
+      background-color: #e68a00;
+    }
+    .btn-stop {
+      background-color: #f44336;
+      color: #fff;
+    }
+    .btn-stop:hover {
+      background-color: #d32f2f;
+    }
+    #status {
+      margin-top: 10px;
+      font-size: 14px;
+      height: 20px;
+    }
+    #videoStream {
       margin-top: 20px;
-      width: 640px;
-      height: 150px;
-      background-color: #222;
       border: 2px solid #444;
-      color: #0f0;
-      font-family: monospace;
-      font-size: 12px;
-      text-align: left;
-      overflow-y: scroll;
-      padding: 10px;
-      white-space: pre-wrap;
+      width: 320px;
+      height: 240px;
     }
   </style>
 </head>
 <body>
-  <div class="container">
-    <h1>🚗 RC카 벡터 기반 라인트레이싱</h1>
-    <div class="video-container">
-      <img id="stream" src="{{ url_for('video_feed') }}" alt="Video Stream" />
-    </div>
+  <h2>RC카 자율주행 모드</h2>
 
-    <div class="log-box" id="logBox">
-      <p>로그 로딩 중...</p>
-    </div>
+  <!-- 시작/정지 버튼 -->
+  <button id="btnStart" class="btn btn-start">시작(Start)</button>
+  <button id="btnStop" class="btn btn-stop">정지(Stop)</button>
+
+  <div id="status"></div>
+
+  <!-- 카메라 스트림 -->
+  <div>
+    <img id="videoStream" src="/video_feed" alt="카메라 스트림" />
   </div>
 
   <script>
-    // 1초마다 /log_data 호출하여 로그 업데이트
-    async function fetchLogs() {
-      try {
-        const resp = await fetch('/log_data');
-        const data = await resp.json();
-        const logBox = document.getElementById('logBox');
-        logBox.textContent = data.join('\n');
-        logBox.scrollTop = logBox.scrollHeight;
-      } catch (e) {
-        console.error('Log fetch error:', e);
-      }
-    }
+    const statusEl = document.getElementById("status");
 
-    window.onload = () => {
-      fetchLogs();
-      setInterval(fetchLogs, 1000);
-    };
+    // 시작 버튼 클릭 시
+    document.getElementById("btnStart").addEventListener("click", () => {
+      statusEl.innerText = "자율주행 시작 요청 중...";
+      fetch("/start", { method: "POST" })
+        .then(res => res.json())
+        .then(data => {
+          statusEl.innerText = "자율주행 시작됨";
+        })
+        .catch(err => {
+          statusEl.innerText = "시작 요청 오류: " + err;
+        });
+    });
+
+    // 정지 버튼 클릭 시
+    document.getElementById("btnStop").addEventListener("click", () => {
+      statusEl.innerText = "정지 요청 중...";
+      fetch("/stop", { method: "POST" })
+        .then(res => res.json())
+        .then(data => {
+          statusEl.innerText = "정지됨";
+        })
+        .catch(err => {
+          statusEl.innerText = "정지 요청 오류: " + err;
+        });
+    });
   </script>
 </body>
 </html>
