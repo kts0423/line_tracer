@@ -10,7 +10,7 @@ Servo steeringServo;
 
 // ───── 기준값 ───────────────────────────────────────────────────────────────
 const int STOP_PWM      = 1500;  // ESC 중립(정지) 펄스
-const int FORWARD_PWM   = 1555;  // ESC 전진 펄스
+const int FORWARD_PWM   = 1560;  // ESC 전진 펄스
 const int REVERSE_PWM   = 1437;  // ESC 후진 펄스
 
 // ───── 조향 서보 보정 범위 ──────────────────────────────────────────────────
