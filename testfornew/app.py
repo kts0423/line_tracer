@@ -253,7 +253,7 @@ def gen_frames():
                 angle_error += 2 * math.pi
             deg_error = angle_error * (180.0 / math.pi)
 
-            if abs(deg_error) < 5.0:
+            if abs(deg_error) < 1.0:
                 int_error_angle = 0
             else:
                 gain_angle = 30.0
