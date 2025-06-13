@@ -631,8 +631,6 @@ def process_video(path):
 
 ## 파일 구조
 
-
-````
 text
 line_tracer-main/
 ├── README.md
