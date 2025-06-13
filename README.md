@@ -43,8 +43,8 @@ Flask/WebSocket 기반의 웹 UI를 통해 실시간 카메라 영상을 스트�
 |--------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | 구성 요소 | 동작 설명 |
 |-----------|-----------|
-| **Python 제어 프로그램**<br>`project/python/app.py` | - **자동 모드**: 카메라(Pi Camera 또는 USB Cam)로 실시간 영상 캡처 → OpenCV 기반 검은 선 검출 → 중심선 좌표 계산 → 조향 각도 및 속도 계산 → 시리얼(Serial)로 Arduino에 `AUTO,STEER:<각도>,SPEED:<PWM>` 형태로 전송<br>- **수동 모드**: Arduino로부터 현재 모드 정보를 수신 (`MODE:MANUAL` 등) → UI에 표시 및 제어 비활성화 |
-| **Arduino 펌웨어**<br>`project/arduino/line_tracer.ino` | - **수동 모드**: AT9 송신기 → R9DS 수신기 → PWM 신호 수신 (PinChangeInterrupt 활용) → `Servo.writeMicroseconds()` 및 ESC 제어로 직접 서보/모터 제어<br>- **자동 모드**: Python으로부터 시리얼 메시지 수신 (`AUTO,STEER:<각도>,SPEED:<PWM>`) → 문자열 파싱 후 해당 각도 및 속도에 맞춰 Servo/ESC 동작 제어<br>- 모드 상태(`MODE:AUTO` 또는 `MODE:MANUAL`)를 시리얼로 Python에 전송 |
+| **Python 제어 프로그램**<br>`project/python/app.py` | - **자동 모드**: 카메라(Pi Camera 또는 USB Cam)로 실시간 영상 캡처 → OpenCV 기반 검은 선 검출 → 중심선 좌표 계산 → 조향 각도 및 속도 계산 → 시리얼(Serial)로 Arduino에 `AUTO,STEER:<각도>,SPEED:<E,S,R>` 형태로 전송<br>- **수동 모드**: Arduino로부터 현재 모드 정보를 수신 (`MODE:MANUAL` 등) → UI에 표시 및 제어 비활성화 |
+| **Arduino 펌웨어**<br>`project/arduino/line_tracer.ino` | - **수동 모드**: AT9 송신기 → R9DS 수신기 → PWM 신호 수신 (PinChangeInterrupt 활용) → `Servo.writeMicroseconds()` 및 ESC 제어로 직접 서보/모터 제어<br>- **자동 모드**: Python으로부터 시리얼 메시지 수신 (`AUTO,STEER:<각도>,SPEED:<E,S,R>`) → 문자열 파싱 후 해당 각도 및 고정된 아두이노의 속도에 맞춰 Servo/ESC 동작 제어<br>- 모드 상태(`MODE:AUTO` 또는 `MODE:MANUAL`)를 시리얼로 Python에 전송 |
 
 
 ---
