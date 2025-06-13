@@ -32,8 +32,8 @@
 
 ## 소개
 
-본 프로젝트는 Raspberry Pi 5의 Pi Camera와 OpenCV를 이용해 바닥의 검은 선을 검출하고, Arduino Uno로 모터·서보를 제어하여 RC Car가 자동으로 선을 따라 주행하도록 구현한 시스템입니다.\
-Flask/WebSocket 기반의 웹 UI를 통해 실시간 카메라 영상을 스트리밍하고, 수동·자동 모드를 전환할 수 있습니다.
+본 프로젝트는 Raspberry Pi 5의 Pi Camera와 OpenCV를 이용해 바닥의 검은 선을 검출하고, Arduino Uno로 모터·서보를 제어하여 RC Car가 자동으로 선을 따라 주행하도록 구현한 자율 주행 모드와 AT9 송신기와 R9DS 수신기에서 펄스폭 변조를 통하여 아두이는 해당 신호를 받고 서보모터와 ESC 모터를 동작시키는 자동 + 수동 조작이 통합 된 시스템입니다.
+Flask/WebSocket 기반의 웹 UI를 통해 실시간 카메라 영상을 스트리밍하여 자동 모드와 수동 모드의 화면이 다릅니다.
 
 ---
 
@@ -41,8 +41,10 @@ Flask/WebSocket 기반의 웹 UI를 통해 실시간 카메라 영상을 스트�
 
 | 모듈명                                  | 역할                                                                                                                                                                                                                           |
 |--------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **Python 서버**<br>`project/python/app.py`  | - **수동 모드**: AT9 송신기 → R9DS 수신기 채널별 PWM 입력(pulseIn) → Flask 웹 UI로 실시간 영상 스트리밍 및 수동 조향·속도 제어<br>- **자동 모드**: Pi Camera 영상 → OpenCV 기반 검은선 검출 → 라인 중심 좌표 추출 → WebSocket/Serial로 Arduino에 조향·속도 명령 전송 |
-| **Arduino 펌웨어**<br>`project/arduino/*.c` | - **수동 모드**: `pulseIn()`으로 RC 채널 PWM 폭 측정 → `Servo.writeMicroseconds()`/ESC 제어로 조향 서보·드라이브 모터 동작<br>- **자동 모드**: Serial로 수신된 `E:<angle>,D:<dir>` 문자열 파싱 → 조향 각도·속도에 맞춰 Servo·ESC 제어                                          |
+| 구성 요소 | 동작 설명 |
+|-----------|-----------|
+| **Python 제어 프로그램**<br>`project/python/app.py` | - **자동 모드**: 카메라(Pi Camera 또는 USB Cam)로 실시간 영상 캡처 → OpenCV 기반 검은 선 검출 → 중심선 좌표 계산 → 조향 각도 및 속도 계산 → 시리얼(Serial)로 Arduino에 `AUTO,STEER:<각도>,SPEED:<PWM>` 형태로 전송<br>- **수동 모드**: Arduino로부터 현재 모드 정보를 수신 (`MODE:MANUAL` 등) → UI에 표시 및 제어 비활성화 |
+| **Arduino 펌웨어**<br>`project/arduino/line_tracer.ino` | - **수동 모드**: AT9 송신기 → R9DS 수신기 → PWM 신호 수신 (PinChangeInterrupt 활용) → `Servo.writeMicroseconds()` 및 ESC 제어로 직접 서보/모터 제어<br>- **자동 모드**: Python으로부터 시리얼 메시지 수신 (`AUTO,STEER:<각도>,SPEED:<PWM>`) → 문자열 파싱 후 해당 각도 및 속도에 맞춰 Servo/ESC 동작 제어<br>- 모드 상태(`MODE:AUTO` 또는 `MODE:MANUAL`)를 시리얼로 Python에 전송 |
 
 
 ---
@@ -92,16 +94,10 @@ Flask/WebSocket 기반의 웹 UI를 통해 실시간 카메라 영상을 스트�
    arduino-cli upload -p /dev/ttyACM0 --fqbn arduino:avr:uno <module>/arduino
    ```
 
-4. **모듈별 서버 실행**
 
-   ```bash
-   cd flask_camera_stream && python app.py  
-   cd ../rc_car_integrated && python app.py  
-   cd ../ROI && python app.py  
-   cd ../testfornew && python app.py  
    ```
 
-5. **웹 브라우저에서 확인**\
+4. **웹 브라우저에서 확인**\
    `http://<Raspberry_Pi_IP>:5000` 접속하여 각 모듈의 UI를 사용하세요.
 
 ---
@@ -110,9 +106,9 @@ Flask/WebSocket 기반의 웹 UI를 통해 실시간 카메라 영상을 스트�
 
 | 기능                 | 핀 번호   | 설명                          |
 | ------------------ | ------ | --------------------------- |
-| RC 채널1 입력 (조향)     | Pin 2  | `pulseIn()`으로 PWM 폭 측정      |
-| RC 채널3 입력 (주행)     | Pin 3  | `pulseIn()`으로 PWM 폭 측정      |
-| RC 채널5 입력 (모드 선택)  | Pin 4  | `pulseIn()`으로 PWM 폭측정       |
+| RC 채널1 입력 (조향)     | Pin 2  | `pinchangeinterrupt`으로 PWM 폭 측정      |
+| RC 채널3 입력 (주행)     | Pin 3  | `pinchangeinterrupt`으로 PWM 폭 측정      |
+| RC 채널5 입력 (모드 선택)  | Pin 4  | `pinchangeinterrupt`으로 PWM 폭측정       |
 | 제어용 서보(조향) PWM 출력  | Pin 9  | `Servo.writeMicroseconds()` |
 | 제어용 ESC(모터) PWM 출력 | Pin 10 | `Servo.writeMicroseconds()` |
 | 좌회전 표시 LED         | Pin 6  | Manual 모드 시 깜빡이             |
@@ -427,30 +423,6 @@ void stopAllMotors() {
 
 
 - **영상 업로드 & 처리**: `/upload`로 `.mp4` 업로드 → `video.process_video()` 호출 → 결과 저장
-
-#### `video.py`
-
-```python
-import cv2, os
-def process_video(path):
-    cap = cv2.VideoCapture(path)
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out_path = path.replace('.mp4', '_out.mp4')
-    out = cv2.VideoWriter(out_path, fourcc, 30.0, (640,480))
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret: break
-        # 프레임 처리 (예: 그레이스케일)
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        out.write(cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR))
-    cap.release(); out.release()
-    with open('test.txt', 'a') as f:
-        f.write(f"Processed: {path}
-")
-    return out_path
-```
-
-- **프레임별 처리**: 입력 영상 그레이스케일 변환 후 저장 → 로그 파일 기록
 
 #### `templates/index.html`
 
