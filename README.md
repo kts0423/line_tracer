@@ -41,13 +41,11 @@ Flask/WebSocket 기반의 웹 UI를 통해 실시간 카메라 영상을 스트�
 
 ## 시스템 구성
 
-| 모듈명                       | 역할                                       |
-| ------------------------- | ---------------------------------------- |
-| **flask\_camera\_stream** | Pi Camera 영상 WebSocket 스트리밍 및 웹 뷰어       |
-| **rc\_car\_integrated**   | OpenCV 기반 라인 검출 → PID 제어 → Arduino 제어    |
-| **ROI**                   | Region-of-Interest 기반 파라미터 테스트           |
-| **testfornew**            | 신규 기능(영상 저장·로깅) 테스트용                     |
-| **공통 Arduino 스케치**        | 각 모듈별 `arduino/` 폴더 내 C 코드로 모터·ESC 제어 샘플 |
+| 모듈명                                  | 역할                                                                                                                                                                                                                           |
+|--------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **Python 서버**<br>`project/python/app.py`  | - **수동 모드**: AT9 송신기 → R9DS 수신기 채널별 PWM 입력(pulseIn) → Flask 웹 UI로 실시간 영상 스트리밍 및 수동 조향·속도 제어<br>- **자동 모드**: Pi Camera 영상 → OpenCV 기반 검은선 검출 → 라인 중심 좌표 추출 → WebSocket/Serial로 Arduino에 조향·속도 명령 전송 |
+| **Arduino 펌웨어**<br>`project/arduino/*.c` | - **수동 모드**: `pulseIn()`으로 RC 채널 PWM 폭 측정 → `Servo.writeMicroseconds()`/ESC 제어로 조향 서보·드라이브 모터 동작<br>- **자동 모드**: Serial로 수신된 `E:<angle>,D:<dir>` 문자열 파싱 → 조향 각도·속도에 맞춰 Servo·ESC 제어                                          |
+
 
 ---
 
@@ -55,9 +53,9 @@ Flask/WebSocket 기반의 웹 UI를 통해 실시간 카메라 영상을 스트�
 
 - Raspberry Pi 5 + Pi Camera 모듈
 - Arduino Uno
-- L298N 모터 드라이버 (또는 ESC)
+- ESC 모터
 - DC 모터, 서보 모터
-- RC 송수신기 (Radiolink AT9 등)
+- RC 송수신기 - Radiolink AT9 
 - 배터리 팩, 점퍼 케이블, 브레드보드
 
 ---
@@ -128,7 +126,7 @@ Flask/WebSocket 기반의 웹 UI를 통해 실시간 카메라 영상을 스트�
 
 ## 구현 세부 내용
 
-### 1. flask\_camera\_stream 모듈
+### 1. 라인트레이싱 파이썬 코드(app.py)
 
 - **주요 파일**: `app.py`, `arduino/test.c`, `templates/index.html`
 
