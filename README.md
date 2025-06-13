@@ -634,34 +634,16 @@ def process_video(path):
 ```text
 line_tracer-main/
 ├── README.md
-├── images/
-│   └── rc_receiver_mapping.png
-├── flask_camera_stream/
-│   ├── app.py
-│   ├── arduino/
-│   │   └── test.c
-│   └── templates/
-│       └── index.html
-├── rc_car_integrated/
-│   ├── app.py
-│   ├── arduino/
-│   │   └── rc_car_combined.c
-│   └── templates/
-│       └── index.html
-├── ROI/
-│   ├── app.py
-│   ├── test.c
-│   ├── test.txt
-│   ├── bin/
-│   │   └── arduino-cli
-│   └── templates/
-│       └── index.html
-└── testfornew/
-    ├── app.py
-    ├── video.py
-    ├── test.txt
-    └── templates/
-        └── index.html
+└── project/
+├── arduino/
+│ └── rc_car_combined.c
+└── python/
+├── app.py
+├── test.txt
+├── video.py
+└── templates/
+└── index.html
+
 ````
 
 ---
