@@ -685,6 +685,6 @@ line_tracer-main/
 
 ## 라이선스
 
-MIT © 2025 Your Name
+MIT © 2025 
 
 
