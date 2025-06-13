@@ -118,9 +118,70 @@ Flask/WebSocket 기반의 웹 UI를 통해 실시간 카메라 영상을 스트�
 
 ### 1. flask\_camera\_stream 모듈
 
-*생략*
+- **주요 파일**: `app.py`, `arduino/test.c`, `templates/index.html`
+
+#### `app.py`
+
+```python
+from flask import Flask, render_template
+import asyncio, websockets, io
+import picamera
+
+app = Flask(__name__)
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+async def stream_camera(websocket, path):
+    with picamera.PiCamera(resolution='640x480', framerate=30) as cam:
+        stream = io.BytesIO()
+        for _ in cam.capture_continuous(stream, 'jpeg', use_video_port=True):
+            stream.seek(0)
+            frame = stream.read()
+            await websocket.send(frame)
+            stream.seek(0)
+            stream.truncate()
+            await asyncio.sleep(0.03)
+
+if __name__ == '__main__':
+    start_server = websockets.serve(stream_camera, '0.0.0.0', 8765)
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(start_server)
+    loop.run_forever()
+```
+
+- **picamera.capture\_continuous**: 카메라의 JPEG 프레임을 연속 캡처
+- **WebSocket 전송**: 바이너리 프레임을 그대로 클라이언트에 브로드캐스트
+- **프레임 속도 제어**: `framerate=30` 및 `await asyncio.sleep(0.03)`로 약 30 fps 유지
+
+#### `templates/index.html`
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Camera Stream</title>
+</head>
+<body>
+  <img id="video" width="640" height="480" />
+  <script>
+    const img = document.getElementById('video');
+    const ws = new WebSocket('ws://' + location.hostname + ':8765/');
+    ws.onmessage = ev => {
+      img.src = 'data:image/jpeg;base64,' + btoa(
+        new Uint8Array(ev.data).reduce((data, byte) => data + String.fromCharCode(byte), '')
+      );
+    };
+  </script>
+</body>
+</html>
+```
+
+- **WebSocket 연결** 후 수신된 JPEG 바이너리를 `<img>` 태그로 실시간 디스플레이
 
 ---
+
 
 ### 2. rc\_car\_integrated 모듈
 
