@@ -1,4 +1,4 @@
-# 🚗 RC-Car Line Tracing 프로젝트
+# 🚗 RC CAR MANUALCONRTOL & AUTOMATE LINE TRACING
 
 ## 목차
 
